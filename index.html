@@ -10,7 +10,7 @@
   html, body { margin: 0; padding: 0; overflow-x: hidden; font-family: Arial, sans-serif; font-size: 18px; background: #f4f4f4; }
   body { max-width: 480px; margin: 0 auto; padding: 12px; }
   h1 { font-size: 24px; margin: 4px 0 12px; }
-  video { width: 100%; max-height: 40vh; background: #000; border-radius: 8px; display: block; }
+  video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; display: block; }
   button { width: 100%; min-height: 60px; font-size: 20px; font-weight: bold; border: 0; border-radius: 10px; margin: 8px 0; background: #1a73e8; color: #fff; }
   button.secundario { background: #666; }
   button.verde { background: #188038; }
@@ -63,6 +63,7 @@
   let stream = null;
   let detectorTimer = null;
   let zxingReader = null;
+  let zxingControls = null;
   let formato = '';
   let ultimo = '';
   let ultimoT = 0;
@@ -111,15 +112,20 @@
         }
       }
 
-      // iPhone / Safari u otros: ZXing
+      // iPhone / Safari u otros: ZXing (la librería abre su propia cámara, con mayor resolución)
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      video.srcObject = null;
       const hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
-      zxingReader = new ZXing.BrowserMultiFormatReader(hints);
-      zxingReader.decodeFromVideoElement(video, (result) => {
-        if (result) {
-          onCodigo(result.getText(), ZXing.BarcodeFormat[result.getBarcodeFormat()]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      zxingReader = new ZXing.BrowserMultiFormatReader(hints, 300);
+      zxingControls = await zxingReader.decodeFromConstraints(
+        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+        video,
+        (result) => {
+          if (result) onCodigo(result.getText(), ZXing.BarcodeFormat[result.getBarcodeFormat()]);
         }
-      });
+      );
       estado('Escaneando (ZXing)...', true);
     } catch (e) {
       estado('No se pudo abrir la cámara: ' + e.message + '. Revisa que la página esté en HTTPS y que aceptaste el permiso.', false);
@@ -129,6 +135,7 @@
   function detenerCamara() {
     clearTimeout(detectorTimer);
     detectorTimer = null;
+    if (zxingControls) { zxingControls.stop(); zxingControls = null; }
     if (zxingReader) { zxingReader.reset(); zxingReader = null; }
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     video.srcObject = null;
