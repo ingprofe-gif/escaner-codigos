@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Escáner de códigos - Sebastian Carvajal</title>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; overflow-x: hidden; font-family: Arial, sans-serif; font-size: 18px; background: #f4f4f4; }
+  body { max-width: 480px; margin: 0 auto; padding: 12px; }
+  h1 { font-size: 24px; margin: 4px 0 12px; }
+  video { width: 100%; max-height: 40vh; background: #000; border-radius: 8px; display: block; }
+  button { width: 100%; min-height: 60px; font-size: 20px; font-weight: bold; border: 0; border-radius: 10px; margin: 8px 0; background: #1a73e8; color: #fff; }
+  button.secundario { background: #666; }
+  button.verde { background: #188038; }
+  label { display: block; font-weight: bold; margin-top: 12px; }
+  input, select, textarea { width: 100%; min-height: 52px; font-size: 20px; padding: 10px; border: 2px solid #999; border-radius: 8px; margin-top: 4px; background: #fff; }
+  textarea { min-height: 90px; }
+  #estado { min-height: 28px; font-size: 18px; margin: 10px 0; font-weight: bold; word-wrap: break-word; }
+</style>
+</head>
+<body>
+<h1>Escáner de códigos</h1>
+
+<video id="video" playsinline muted></video>
+<button id="btnCamara">Iniciar cámara</button>
+<button id="btnParar" class="secundario">Detener cámara</button>
+
+<form id="form">
+  <label for="tipo">Tipo</label>
+  <select id="tipo" required>
+    <option value="">-- Elige --</option>
+    <option value="Bodega">Bodega</option>
+    <option value="Medidor">Medidor</option>
+  </select>
+
+  <label for="codigo">Código</label>
+  <input id="codigo" type="text" autocomplete="off" required>
+
+  <label for="cantidad">Cantidad o lectura</label>
+  <input id="cantidad" type="text" inputmode="decimal" autocomplete="off" required>
+
+  <label for="usuario">Usuario</label>
+  <input id="usuario" type="text" autocomplete="off" required>
+
+  <label for="notas">Notas</label>
+  <textarea id="notas"></textarea>
+
+  <button type="submit" class="verde">Guardar</button>
+</form>
+
+<div id="estado"></div>
+
+<script>
+  // Configuración (la URL /exec, el token y la hoja)
+  const EXEC_URL = 'https://script.google.com/macros/s/AKfycbygB1aNbuwqLhTPH6P0N47qfw0I1hJFi-5SiS3nNGSQ0Q_TnDMm3YdtFkVeNzqydY_D/exec';
+  const TOKEN = 'MI-TOKEN';
+  const HOJA = 'Escaneos';
+
+  const $ = id => document.getElementById(id);
+  const video = $('video');
+  let stream = null;
+  let detectorTimer = null;
+  let zxingReader = null;
+  let formato = '';
+  let ultimo = '';
+  let ultimoT = 0;
+
+  function estado(msg, ok) {
+    $('estado').textContent = msg;
+    $('estado').style.color = ok ? '#188038' : '#c5221f';
+  }
+
+  function onCodigo(texto, nombreFormato) {
+    const ahora = Date.now();
+    if (texto === ultimo && ahora - ultimoT < 3000) return; // evita repetir la misma lectura
+    ultimo = texto;
+    ultimoT = ahora;
+    $('codigo').value = texto;
+    formato = nombreFormato;
+    if (navigator.vibrate) navigator.vibrate(150);
+    estado('Código leído: ' + texto + ' (' + nombreFormato + ')', true);
+  }
+
+  async function iniciarCamara() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+
+      // Android / Chrome: BarcodeDetector
+      if ('BarcodeDetector' in window) {
+        const soportados = await BarcodeDetector.getSupportedFormats();
+        if (soportados.includes('ean_13') && soportados.includes('code_128')) {
+          const detector = new BarcodeDetector({ formats: ['ean_13', 'code_128'] });
+          const leer = async () => {
+            if (!stream) return;
+            try {
+              const codigos = await detector.detect(video);
+              if (codigos.length) onCodigo(codigos[0].rawValue, codigos[0].format);
+            } catch (e) { /* frame sin código */ }
+            detectorTimer = setTimeout(leer, 250);
+          };
+          leer();
+          estado('Escaneando (BarcodeDetector)...', true);
+          return;
+        }
+      }
+
+      // iPhone / Safari u otros: ZXing
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
+      zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+      zxingReader.decodeFromVideoElement(video, (result) => {
+        if (result) {
+          onCodigo(result.getText(), ZXing.BarcodeFormat[result.getBarcodeFormat()]);
+        }
+      });
+      estado('Escaneando (ZXing)...', true);
+    } catch (e) {
+      estado('No se pudo abrir la cámara: ' + e.message + '. Revisa que la página esté en HTTPS y que aceptaste el permiso.', false);
+    }
+  }
+
+  function detenerCamara() {
+    clearTimeout(detectorTimer);
+    detectorTimer = null;
+    if (zxingReader) { zxingReader.reset(); zxingReader = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
+    estado('Cámara detenida', true);
+  }
+
+  $('btnCamara').addEventListener('click', iniciarCamara);
+  $('btnParar').addEventListener('click', detenerCamara);
+
+  $('form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const datos = {
+      token: TOKEN,
+      hoja: HOJA,
+      fecha: new Date().toLocaleString('es-EC'),
+      tipo: $('tipo').value,
+      codigo: $('codigo').value.trim(),
+      formato: formato || 'manual',
+      cantidad: $('cantidad').value.trim(),
+      usuario: $('usuario').value.trim(),
+      notas: $('notas').value.trim()
+    };
+    if (!datos.tipo || !datos.codigo || !datos.cantidad || !datos.usuario) {
+      estado('Completa tipo, código, cantidad y usuario.', false);
+      return;
+    }
+    localStorage.setItem('usuario', datos.usuario);
+    estado('Guardando...', true);
+    try {
+      // no-cors: el navegador no permite leer la respuesta; revisa la hoja para confirmar.
+      await fetch(EXEC_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(datos)
+      });
+      estado('Enviado. Revisa la fila en la hoja "Escaneos".', true);
+      $('codigo').value = '';
+      $('cantidad').value = '';
+      $('notas').value = '';
+      formato = '';
+      ultimo = '';
+    } catch (e) {
+      estado('Error al enviar: ' + e.message, false);
+    }
+  });
+
+  $('usuario').value = localStorage.getItem('usuario') || '';
+</script>
+</body>
+</html>
